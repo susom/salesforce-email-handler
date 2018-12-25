@@ -53,6 +53,10 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             return result;
         }
         System.debug('subject is ' + subject);
+        System.debug('email is from ' + inboundEmail.fromAddress);
+        System.debug('addressee is ' + inboundEmail.toAddresses);
+        System.debug('cc list is ' + flattenStringArray(inboundEmail.ccAddresses));
+        System.debug(' list for inference ' + flattenStringArray(inboundEmail.toAddresses)+' '+ flattenStringArray(inboundEmail.ccAddresses));
         // the first serious possibility to consider is that this is a submission from a web intake form
         // that references an existing case
         if (String.isNotBlank(subject) && subject.length() > SUBJECT_PREFIX.length() && SUBJECT_PREFIX.equals(subject.substring(0, subjectPrefixLen))) {
@@ -234,11 +238,11 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 attachCommentToCase(latestComment, false); // important! do not notify the owner - changing false to true here leads to an infinite notification loop
 
                 // if it should go out to the customer, send it
-                if (isPublicComment) {
-                    respondent = orgProperties.get('longname');
-                    latestComment = allComentsForCase(theCase);
-                    notify(theCase.Contact.Email, new String[] {'scweber@stanford.edu', email.fromAddress}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
-                }
+//                if (isPublicComment) {
+//                    respondent = orgProperties.get('longname');
+//                    latestComment = allComentsForCase(theCase);
+//                    notify(theCase.Contact.Email, new String[] {'scweber@stanford.edu', email.fromAddress}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
+//                }
             }
 
         } else {
@@ -254,17 +258,17 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
 
     private String inferQueueFromAddressee() {
         String inferredQueue;
-        String addressedTo = email.toAddresses[0];
-        if (((String) email.plainTextBody).containsIgnoreCase('redcap') || ((String) email.subject).containsIgnoreCase('redcap')) {
-            // this would be slightly cleaner if populated in a custom field somewhere
-            inferredQueue = QUEUE_REDCAP;
-        } else if (addressedTo.containsIgnoreCase('informatics')) {
+        String addressedTo = flattenStringArray(email.toAddresses)+' '+ flattenStringArray(email.ccAddresses);
+        if (addressedTo.containsIgnoreCase('informatics')) {
             inferredQueue = QUEUE_RIC;
         } else if (addressedTo.containsIgnoreCase('redcap')) {
             inferredQueue = QUEUE_REDCAP;
         } else if (addressedTo.containsIgnoreCase('rit-support')) {
             inferredQueue = QUEUE_RESEARCH_IT;
-        } else {
+        } else if (((String) email.plainTextBody).containsIgnoreCase('redcap') || ((String) email.subject).containsIgnoreCase('redcap')) {
+            // this would be slightly cleaner if populated in a custom field somewhere
+            inferredQueue = QUEUE_REDCAP;
+        } else  {
             inferredQueue = QUEUE_RIC;
         }
         parseQueue(inferredQueue);
@@ -297,6 +301,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             // so use the info in the case rather than the reply-to when notifying the consultant(s)
             System.debug('theCase.OwnerId ' + theCase.OwnerId);
             latestComment = allComentsForCase(theCase);
+            // XXX TODO the logic here needs work: if the owner is already listed on the email this creates a duplicate
             notify(getEmailByQueueOrUserId(theCase.OwnerId), new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
         }
     }
@@ -486,6 +491,11 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             outbound.setSubject('Re: ' + subject);
             outbound.setPlainTextBody(message);
             outbound.setReplyTo(orgProperties.get('email'));
+            if (emailOnException) {
+                // i.e. this is the first attempt and not the attempt to notify susan of an exception
+                // do things in this order to capture as much information in the case as possible even when there is a problem
+                saveEmailToCase(subject, message, flattenStringArray(toAddresses), flattenStringArray(bccAddresses), null, null);
+            }
             Messaging.sendEmail(new Messaging.SingleEmailMessage[]{
                     outbound
             });
@@ -497,6 +507,42 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 notify(new String[] {'scweber@stanford.edu'}, new String[]{}, 'Salesforce Error', errorMessage, false);
             }
         }
+    }
+
+    private void saveEmailToCase( String subject, String body, String addressee, String bcc, String idOfSFUser, String relationship) {
+        EmailMessage emailMessage = new EmailMessage();
+//        emailMessage.Status = '3'; // email was sent
+        emailMessage.RelatedToId = theCase.Id; // related to
+        emailMessage.FromAddress =  orgProperties.get('email'); // from address
+
+        emailMessage.Subject = subject; // email subject
+        emailMessage.TextBody = body; // email body
+        emailMessage.ToAddress = addressee;
+        emailMessage.BccAddress = bcc;
+        insert emailMessage; // insert
+
+        // Add Email Message Relation for id of the sender
+        if (idOfSFUser != null && relationship != null) {
+            EmailMessageRelation emr = new EmailMessageRelation();
+            emr.EmailMessageId = emailMessage.Id;
+            emr.RelationId = idOfSFUser; // user id of the sender
+            emr.RelationType = relationship;
+            insert emr;
+        }
+    }
+
+    public String flattenStringArray (String[] stringArray) {
+        String flatString = '';
+        if (stringArray == null) {
+            return flatString;
+        }
+        for (Integer i = 0; i < stringArray.size(); i++) {
+            flatString = flatString + stringArray[i];
+            if (i < stringArray.size() - 1) {
+                flatString = flatString + ',';
+            }
+        }
+        return flatString;
     }
 
     public Case getCaseById(Id caseId) {
@@ -904,7 +950,6 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         theCase.CustomOrigin__c = mySubString(theCase.CustomOrigin__c , 45);
         theCase.Publication_Plans__c = mySubString(theCase.Primary_Category__c, 45);
     }
-
 
     public Case getExistingCase(Messaging.InboundEmail email) {
         // Determine if there is an existing case by the contents of this email.
