@@ -510,6 +510,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     }
 
     private void saveEmailToCase( String subject, String body, String addressee, String bcc, String idOfSFUser, String relationship) {
+        if (theCase == null) return;
         EmailMessage emailMessage = new EmailMessage();
 //        emailMessage.Status = '3'; // email was sent
         emailMessage.RelatedToId = theCase.Id; // related to
