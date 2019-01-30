@@ -5,7 +5,7 @@
 private class SMEmailServiceTest {
     // Utility function to send a test email
     public static String CONSULT_QUEUE = 'Consult Request Queue';
-    public static String TEST_JSON = '{"LastName":"Kiamanesh","FirstName":"Eileen F","SUNet_ID__c":"","Email":"ekiamanesh@gmail.com","Phone":"(650) 723-7688","Department":"","suaffiliation__c":"","Rank__c":"Other Stanford Faculty/Staff/Student","Stanford_Dept__c":null}~#~#~{"SUnet_ID_case__c":"eileenk","Subject":"Pilot of SF2 ","Availability__c":"","Origin":"Web","ContactEmail":"ekiamanesh@gmail.com","ContactPhone":"(650) 723-7688","Description":"Initial submission for testing purposes. ","Funding_status__c":"Funding Status Unknown","I_am_PI_case__c":"false","IRB_Protocol__c":"25486","Project_Department__c":null,"REDCap_StudyName__c":"","Publication_Plans__c":"Unsure","Original_Queue_Name__c":"queuename=Consult Request Queue;shortname=RIC;longname=Research Informatics Center;url=https://ric-help.med.stanford.edu/;email=informaticsonconsultation@lists.stanford.edu;owneralias=richelp","CustomOrigin__c":"RIC Form V1","Primary_Category__c":"General Inquiry","PI_Name__c":"Eileen-PI Kiamanesh"}';
+    public static String TEST_JSON = '{"LastName":"Kiamanesh","FirstName":"Eileen F","SuppliedName":"Eileen Kiamanesh","SUNet_ID__c":"eileenk","Email":"ekiamanesh@gmail.com","SuppliedEmail":"ekiamanesh@gmail.com"}~#~#~{"SUnet_ID_case__c":"eileenk","Subject":"Pilot of SF2 ","Availability__c":"","Origin":"Web","ContactEmail":"ekiamanesh@gmail.com","ContactPhone":"(650) 723-7688","Description":"Initial submission for testing purposes. ","Funding_status__c":"Funding Status Unknown","I_am_PI_case__c":"false","IRB_Protocol__c":"25486","Project_Department__c":null,"REDCap_StudyName__c":"","Publication_Plans__c":"Unsure","Original_Queue_Name__c":"queuename=Consult Request Queue;shortname=RIC;longname=Research Informatics Center;url=https://ric-help.med.stanford.edu/;email=informaticsonconsultation@lists.stanford.edu;owneralias=richelp","CustomOrigin__c":"RIC Form V1","Primary_Category__c":"General Inquiry","Project_Record_ID__c":"2","PI_Name__c":"Eileen-PI Kiamanesh"}';
 
     public static void setup() {
 
@@ -58,17 +58,16 @@ private class SMEmailServiceTest {
         theCase.Description = '55';
         theCase.Subject = '66';
         theCase.OwnerId = UserInfo.getUserId();
+        theCase.Project_Record_ID__c = '1';
         System.runAs(new User(Id = UserInfo.getUserId()))
         {insert theCase;}
-        List<Case> caseList = [SELECT Id, CaseNumber, reference__c, Description, Subject,OwnerId, Owner.Id, Owner.Name FROM Case WHERE Subject = '66'];
+        List<Case> caseList = [SELECT Id, CaseNumber, reference__c, Description, Subject,OwnerId, Owner.Id, Owner.Name,Project_Record_ID__c FROM Case WHERE Subject = '66'];
         theCase = caseList.get(0);
         emailServObj.theCase = theCase;
         return emailServObj;
     }
 
-
-
-    @isTest public static  void validateNewCaseCreation() {
+    @isTest public static void validateNewCaseCreation() {
         setup();
         SMEmailService emailServObj = new SMEmailService();
         Messaging.InboundEmail email = new Messaging.InboundEmail();
@@ -93,7 +92,7 @@ private class SMEmailServiceTest {
         }
     }
 
-    @isTest public static  void validateCaseResponse1() {
+    @isTest public static void validateIncomingEmailNotInReferenceToExistingCase() {
         setup();
         SMEmailService emailServObj = new SMEmailService();
         Messaging.InboundEmail email = new Messaging.InboundEmail();
@@ -101,12 +100,12 @@ private class SMEmailServiceTest {
         email.toAddresses = new String[]{
                 'test@noorg.edu'
         };
-        email.subject = 'test';
+        email.subject = 'some random subject';
         email.fromName = 'scweber';
         email.fromAddress = 'test@noorg.edu';
         email.replyTo = 'nobody@stanford.edu';
         emailServObj.respondent = 'ditto';
-        email.plainTextBody = TEST_JSON;
+        email.plainTextBody = 'this is random and should be politely rejected';
         User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
 
         // Insert account as current user
@@ -114,16 +113,11 @@ private class SMEmailServiceTest {
         System.runAs (thisUser) {
             Messaging.InboundEmailResult result = emailServObj.handleInboundEmail(email, env);
 
-
-            email.subject = 'Re: mumble';
-            email.plainTextBody = 'Hi, this is random';
-
             result = emailServObj.handleInboundEmail(email, env);
 
             System.assertEquals(result.success, true);
         }
     }
-
 
     @isTest public static  void validateCaseResponse2() {
         setup();
@@ -161,12 +155,98 @@ private class SMEmailServiceTest {
         }
     }
 
+    @isTest public static  void validateCaseResponse3() {
+        setup();
+        SMEmailService emailServObj = new SMEmailService();
+        Messaging.InboundEmail email = new Messaging.InboundEmail();
+        Messaging.InboundEnvelope env = new Messaging.InboundEnvelope();
+        email.toAddresses = new String[]{
+                'test@noorg.edu'
+        };
+        email.subject = 'test';
+        email.fromName = 'scweber';
+        email.fromAddress = 'test@noorg.edu';
+        email.replyTo = 'nobody@stanford.edu';
+        emailServObj.respondent = 'ditto';
+        email.plainTextBody = TEST_JSON;
+        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
+
+        // Insert account as current user
+
+        System.runAs (thisUser) {
+
+            Messaging.InboundEmailResult result = emailServObj.handleInboundEmail(email, env);
+            // ok, now look up the case and send a response email
+            List<Case> caseList = [SELECT Id, CaseNumber, reference__c, Description, Subject,OwnerId, Owner.Id, Owner.Name, Project_Record_ID__c FROM Case ];
+            if (caseList.size() > 0) {
+                Case theCase = caseList.get(0);
+                System.debug('found case found after insertion '+theCase.Project_Record_ID__c);
+                email.subject =  SMEmailService.SUBJECT_PREFIX  + theCase.Project_Record_ID__c;
+                email.plainTextBody = 'Hi, this is not so random';
+
+                result = emailServObj.handleInboundEmail(email, env);
+
+                System.assertEquals(result.success, true);
+            } else {
+                System.debug('no cases found after insertion');
+            }
+        }
+    }
+
+//    @isTest public static  void validateCaseResponseArchived() {
+//
+//        SMEmailService emailServObj = setupEmailService();
+//        Messaging.InboundEmail email = new Messaging.InboundEmail();
+//        Messaging.InboundEnvelope env = new Messaging.InboundEnvelope();
+//        email.toAddresses = new String[]{
+//                'test@noorg.edu'
+//        };
+//        email.subject = 'test';
+//        email.fromName = 'scweber';
+//        email.fromAddress = 'test@noorg.edu';
+//        email.replyTo = 'nobody@stanford.edu';
+//        emailServObj.respondent = 'ditto';
+//        email.plainTextBody = 'some inquiry';
+//
+//        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
+//        System.runAs (thisUser) {
+//
+//            // ok, now look up the case and send a response email
+//            List<Case> caseList = [SELECT Id, CaseNumber, reference__c, Description, Subject,OwnerId, Owner.Id, Owner.Name, Project_Record_ID__c FROM Case ];
+//            if (caseList.size() > 0) {
+//                Case theCase = caseList.get(0);
+//                theCase.Status = SMEmailService.STATE_ARCHIVED;
+//                update theCase;
+//                System.debug('found case found after insertion '+theCase.Project_Record_ID__c);
+//                email.subject =  SMEmailService.SUBJECT_PREFIX  + theCase.Project_Record_ID__c;
+//                email.plainTextBody = 'Hi, this is not so random';
+//
+//                result = emailServObj.handleInboundEmail(email, env);
+//
+//                System.assertEquals(result.success, true);
+//            } else {
+//                System.debug('no cases found after insertion');
+//            }
+//        }
+//    }
+
     @isTest static void validatePareDownEmail() {
         SMEmailService emailServObj = new SMEmailService();
         String sweber = 'test@noorg.edu';
         String email = emailServObj.pareDownEmail(sweber);
         System.assertEquals( sweber  , email);
+    }
 
+    @isTest static void validateTrimCaseToFit() {
+        SMEmailService emailServObj = new SMEmailService();
+
+        emailServObj.theCase = new Case();
+        String description = 'this is a test description';
+        emailServObj.theCase.Description = description;
+        emailServObj.theCase.Subject = '66';
+        emailServObj.theCase.OwnerId = UserInfo.getUserId();
+        emailServObj.trimCaseToFit();
+        System.assertEquals( description  , emailServObj.theCase.Description);
     }
 
     @isTest static void validateGetTags() {

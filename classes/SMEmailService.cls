@@ -15,9 +15,10 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     private static final String EMAIL_REGEX = '(?:[a-z0-9!#$%&\'*+/=?^_`{|}~-]+(?:\\.[a-z0-9!#$%&\'*+/=?^_`{|}~-]+)*|"(?:[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x21\\x23-\\x5b\\x5d-\\x7f]|\\\\[\\x01-\\x09\\x0b\\x0c\\x0e-\\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\\[(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?|[a-z0-9-]*[a-z0-9]:(?:[\\x01-\\x08\\x0b\\x0c\\x0e-\\x1f\\x21-\\x5a\\x53-\\x7f]|\\\\[\\x01-\\x09\\x0b\\x0c\\x0e-\\x7f])+)\\])';
 
     private static final String END_NEW_MESSAGE_INDICATOR = '====== Please type any reply above this line ======';
+    private static final String NEW_CASE_SUBJECT  = 'base64_encoded';
     private static final String JSON_PREFIX  = '{"LastName":';
-    private static final String SUBJECT_PREFIX  = 'Project_Record_ID__c=';
-    private static final String STATE_ARCHIVED = 'Archived';
+    public static final String SUBJECT_PREFIX  = 'Project_Record_ID__c='; // public for testing
+    public static final String STATE_ARCHIVED = 'Archived';
     private static final String EMAIL_TEMPLATE_CUSTOMER_ACK_NEW_RIC = 'CUSTOMER_ACK_NEW_CASE_RIC';
     private static final String EMAIL_TEMPLATE_CUSTOMER_ACK_NEW_RIT = 'CUSTOMER_ACK_NEW_CASE_RIT';
     private static final String EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT = 'CASE_NOTIFY_NEW_COMMENT';
@@ -34,6 +35,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     private static final String QUEUE_RESEARCH_IT = 'queuename='+QN_RESEARCH_IT+';shortname=Research IT;longname=Research IT;url=http://redcap.stanford.edu/redcap/plugins/gethelp/rit.php;email=rit-support@stanford.edu';
     private static final String QUEUE_RIC = 'queuename='+QN_RIC+';shortname=RIC;longname=Research Informatics Center;url=https://ric-help.med.stanford.edu/;email=ric-support@stanford.edu';
 
+    Boolean sendCaseCommentToCustomer = false;
     private String statusMessage   = '';
     private String latestComment  = '';
     public Case theCase = null; /* public for test case coverage */
@@ -41,6 +43,15 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     public Messaging.InboundEmail email; /* public for test case coverage */
     private Map<String,String> orgProperties = new Map<String,String>();
     public String respondent = '';
+    private String preselectedQueue = '';
+
+    public void setSendCaseCommentToCustomer(boolean sendCaseCommentToCustomer) {
+        this.sendCaseCommentToCustomer = sendCaseCommentToCustomer;
+    }
+
+    public void setPreselectedQueueRedcap() {
+        this.preselectedQueue = QN_REDCAP;
+    }
 
     global Messaging.InboundEmailResult handleInboundEmail(Messaging.InboundEmail inboundEmail, Messaging.InboundEnvelope envelope) {
         Messaging.InboundEmailResult result = new Messaging.InboundEmailResult();
@@ -78,10 +89,20 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         String body = email.plainTextBody;
         // the next serious possibility to consider is that this is a submission from a web intake form
         // that specifies a brand new case
+        if (String.isNotBlank(email.subject) && NEW_CASE_SUBJECT.equals(email.subject)) {
+            body = EncodingUtil.base64Decode(body.replaceAll('(\\r|\\n|\\s)+','')).toString();
+        }
+        System.debug('2- body is now '+body);
         if (String.isNotBlank(body) && body.length() > jsonPrefixLen && JSON_PREFIX.equals(body.substring(0, jsonPrefixLen))) {
             try {
+                // because the REDCap emailer seems to break up the email into lines,
+                // strip out all unescaped newlines before proceeding
+//                Pattern lineBreaks = Pattern.compile('[\n\r]');
+//                body = lineBreaks.matcher(body).replaceAll('');
+                body =  body.replaceAll('(\\r|\\n)+','');
                 System.debug('creating a new case from body ' + body);
-                String [] jsonStrings = ((String) email.plainTextBody).split('~#~#~');
+
+                String [] jsonStrings = body.split('~#~#~');
                 System.debug('# strings found '+jsonStrings.size());
                 // Production REDCap is inserting newlines where none should exist
                 // so before proceeding glue everything back together again
@@ -89,14 +110,8 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 //  upsert theContact;  just calling upsert creates duplicates, so we have to roll our own lookup
                 homebrewUpsert(theContact);
 
-                if (jsonStrings.size()  > 2) {
-
-                    for (Integer i = 2; i < jsonStrings.size(); i++) {
-                        jsonStrings[1] += jsonStrings[i];
-                    }
-                }
-
                 theCase = (Case) JSON.deserialize(jsonStrings[1], Case.class);
+                System.debug('newly created case description is ' + theCase.Description);
                 trimCaseToFit();
                 theCase.ContactId = theContact.Id;
 
@@ -238,11 +253,15 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 attachCommentToCase(latestComment, false); // important! do not notify the owner - changing false to true here leads to an infinite notification loop
 
                 // if it should go out to the customer, send it
-//                if (isPublicComment) {
-//                    respondent = orgProperties.get('longname');
-//                    latestComment = allComentsForCase(theCase);
-//                    notify(theCase.Contact.Email, new String[] {'scweber@stanford.edu', email.fromAddress}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
-//                }
+                // note the while sendCaseCommentToCustomer is initialized to false, there is a constructor
+                // that sets it to true that is invoked by the REDCapEmailHandler
+                System.debug('considering sending comment to case ' + sendCaseCommentToCustomer+' '+isPublicComment);
+                if (sendCaseCommentToCustomer && isPublicComment) {
+                    respondent = orgProperties.get('longname');
+                    latestComment = allComentsForCase(theCase);
+                    System.debug('notifying customer! ' + latestComment);
+                    notify(theCase.Contact.Email, new String[] {'scweber@stanford.edu', email.fromAddress}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
+                }
             }
 
         } else {
@@ -491,10 +510,22 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             outbound.setSubject('Re: ' + subject);
             outbound.setPlainTextBody(message);
             outbound.setReplyTo(orgProperties.get('email'));
+
             if (emailOnException) {
-                // i.e. this is the first attempt and not the attempt to notify susan of an exception
+                // i.e. this is the first notification attempt and not the attempt to notify susan of an exception
                 // do things in this order to capture as much information in the case as possible even when there is a problem
-                saveEmailToCase(subject, message, flattenStringArray(toAddresses), flattenStringArray(bccAddresses), null, null);
+                List<Attachment> attachments = copyEmailtoCase ( email );
+//                saveEmailToCase(subject, message, flattenStringArray(toAddresses), flattenStringArray(bccAddresses), null, null);
+                if (attachments != null && attachments.size() > 0) {
+                    List<Id> idList = new List<Id>();
+                    for (Attachment a:attachments) {
+                        System.debug('==> Found attachment: ' + a.Id);
+                        idList.add(a.Id);
+                    }
+
+                    outbound.setEntityAttachments(idList);
+
+                }
             }
             Messaging.sendEmail(new Messaging.SingleEmailMessage[]{
                     outbound
@@ -509,7 +540,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         }
     }
 
-    private void saveEmailToCase( String subject, String body, String addressee, String bcc, String idOfSFUser, String relationship) {
+ /*   private void saveEmailToCase( String subject, String body, String addressee, String bcc, String idOfSFUser, String relationship) {
         if (theCase == null) return;
         EmailMessage emailMessage = new EmailMessage();
 //        emailMessage.Status = '3'; // email was sent
@@ -517,7 +548,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         emailMessage.FromAddress =  orgProperties.get('email'); // from address
 
         emailMessage.Subject = subject; // email subject
-        emailMessage.TextBody = body; // email body
+        emailMessage.TextBody =  mySubString(body, 31999); // email body
         emailMessage.ToAddress = addressee;
         emailMessage.BccAddress = bcc;
         insert emailMessage; // insert
@@ -530,6 +561,90 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             emr.RelationType = relationship;
             insert emr;
         }
+    } */
+
+    public List<Attachment> copyEmailtoCase (Messaging.InboundEmail email) {
+        List<Attachment> newAttachments = new List<Attachment>();
+        if (theCase == null) {
+            return newAttachments;
+            // no case to copy to so fail fast
+        }
+        // Takes the inbound email and envelope and uses it to generate a new email including all attachments
+        EmailMessage msg = new EmailMessage (
+                ToAddress = email.toAddresses[0],
+                FromAddress = email.fromAddress,
+                FromName = email.fromName,
+                Subject =  email.subject,
+                TextBody = makeDescription(email),
+                HtmlBody = email.htmlBody,
+                Incoming = true,
+                Status = '0',		//'0' = New,'1' = Read,'2' = Replied,'3' = Sent,'4' = Forwarded
+                ParentId = theCase.Id
+        );
+        insert msg;
+        String newEmailId = msg.Id;
+        //find attachments
+        List<Messaging.InboundEmail.TextAttachment> tAttachments = email.textAttachments;
+        List<Messaging.InboundEmail.BinaryAttachment> bAttachments = email.binaryAttachments;
+
+        if (tAttachments != null) {
+            for (Messaging.InboundEmail.TextAttachment t:tAttachments) {
+                System.debug('==> Found text attachment: ' + t.fileName);
+                Attachment a = new Attachment(
+                        Body = Blob.valueOf(t.body),
+                        Name = t.fileName,
+                        ParentId = newEmailId,
+                        ContentType = t.mimeTypeSubType
+                );
+                newAttachments.add(a);
+            }
+        }
+        if (bAttachments != null) {
+            for (Messaging.InboundEmail.BinaryAttachment b:bAttachments) {
+                System.debug('==> Found binary attachment: ' + b.fileName);
+                Attachment a = new Attachment(
+                        Body = b.body,
+                        Name = b.fileName,
+                        ParentId = newEmailId,
+                        ContentType = b.mimeTypeSubType
+                );
+                newAttachments.add(a);
+            }
+        }
+        if (newAttachments.size()>0) {
+            insert(newAttachments);
+        }
+        return newAttachments;
+    }
+
+    public static String makeDescription (Messaging.InboundEmail email) {
+        String sDesc = '';
+        if (NEW_CASE_SUBJECT.equals(email.subject )) {
+            sDesc = EncodingUtil.base64Decode(email.plainTextBody.replaceAll('(\\r|\\n|\\s)+','')).toString();
+        } else if (email.plainTextBody != '' && email.plainTextBody != null) {
+            sDesc = email.plainTextBody;
+        } else {
+            sDesc = StripHTML(email.htmlBody);
+        }
+        return sDesc;
+    }
+
+    public static String StripHTML(String html) {
+        String result = '';
+        //This is a poor man's attempt to convert html email content into standard text...
+        result = html.replaceAll('\n', '');
+        result = result.replaceAll('\r', '');
+        result = result.replaceAll('(?i)<(tr|br|ul|p)(| |/| .*?)>', '\n');		//replace tr br ul or p tags (ignore class) with linefeed
+        result = result.replaceAll('(?i)</(li|p)>', '\n');				//replace \li or \p with linefeed
+        result = result.replaceAll('(?i)<li(| |/| .*?)>', '\t\\* ');	//replace li with tab*
+        result = result.replaceAll('(?i)<td(| |/| .*?)>', '\t');		//replace td with tab*
+        result = result.replaceAll('(?i)&nbsp;', ' ');
+        //regular expression to match all HTML/XML tags
+        String HTML_TAG_PATTERN = '<\\w.*?>';							//replace most other html tags with nothing
+        Pattern myPattern = Pattern.compile(HTML_TAG_PATTERN);
+        Matcher myMatcher = myPattern.matcher(result);
+        result = myMatcher.replaceAll('');
+        return result;
     }
 
     public String flattenStringArray (String[] stringArray) {
@@ -630,48 +745,6 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     private String[] errorQueue() {
         return new String[] {'scweber@stanford.edu'};
     }
-/*
-    private Contact upsertContactByEmail(String email, String name) {
-        // this may be over-engineering but I'd like to support cc-ed people writing in to the case
-
-        List<Contact> contactList = [SELECT Id, FirstName, LastName, Name, Email FROM Contact WHERE Email = :email];
-        if(contactList.size() > 0) {
-            return contactList.get(0);
-        }
-
-        // else create a new contact
-        Contact theContact = new Contact(Email = email);
-        // names come in two flavors. A) "Weber, Susan C" and B) Susan C Weber or "Susan C Weber"
-        name = name.replace('"', '');
-        if (name.contains(',')) {
-            String[] nameParts = name.split(',');
-            for (Integer i = 0; i < nameParts.size(); i++) {
-                if (i == 0) {
-                    theContact.LastName = nameParts[i];
-                    theContact.FirstName = '';
-                } else {
-                    theContact.FirstName = contact.FirstName + nameParts[i];
-                }
-            }
-        } else {
-            String[] nameParts = name.split(' ');
-            for (Integer i = nameParts.size() - 1; i >= 0; i--) {
-                if (i == nameParts.size() - 1) {
-                    theContact.LastName = nameParts[i];
-                    theContact.FirstName = '';
-                } else {
-                    theContact.FirstName = nameParts[i] + ' ' + contact.FirstName ;
-                }
-            }
-            theContact.FirstName = theContact.FirstName.trim();
-        }
-        if (String.isBlank(theContact.LastName)) {
-            theContact.LastName = email;
-        }
-
-        homebrewUpsert(theContact);
-        return theContact;
-    }*/
 
     private User getSFUser(String emailOrAlias) {
         Map<String, User> emailToUser = new Map<String, User>();
@@ -681,60 +754,19 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             emailToUser.put(usr.Email.toLowerCase(), usr);
             emailToUser.put(usr.Alias.toLowerCase(), usr);
         }
-        System.debug('emailToUser ' +emailToUser);
-        System.debug('emailOrAlias' + emailOrAlias);
-        System.debug('pareDownEmail(emailOrAlias) '+pareDownEmail(emailOrAlias));
+        System.debug('getSFUser emailToUser ' +emailToUser);
+        System.debug('getSFUser emailOrAlias' + emailOrAlias);
+        System.debug('getSFUser pareDownEmail(emailOrAlias) '+pareDownEmail(emailOrAlias));
+        System.debug('getSFUser returning ' + emailToUser.get(pareDownEmail(emailOrAlias.toLowerCase())));
         return emailToUser.get(pareDownEmail(emailOrAlias.toLowerCase()));
     }
-
-//    private Id getQueueOrUser(String emailOrAlias) {
-//        Id foundId = null;
-//        List<User> usrList = [SELECT Id, FirstName, LastName, Name, Email, Alias FROM User WHERE Alias = :emailOrAlias OR Email LIKE :('%' + emailOrAlias + '%') ];
-//        if (usrList.size() == 0) {
-//            List<Group> groupIdList = [SELECT Id, Name, Email FROM Group WHERE Type = 'Queue' AND  (Name = :emailOrAlias OR Email  LIKE :('%' + emailOrAlias + '%')  ) ];
-//            if (!groupIdList.isEmpty()) {
-//                foundId = groupIdList.get(0).Id;
-//            }
-//
-//        } else {
-//            foundId = usrList.get(0).Id;
-//        }
-//        return foundId;
-//    }
 
     private void parseQueue(String inputString) {
         // theCase.Active_Queue__c comes in the following format
         // queuename=Consult Request Queue;shortname=RIC;longname=Research Informatics Center;url=https://ric-help.med.stanford.edu/;email=ric-support@stanford.edu
-        if (inputString == null || inputString.length() == 0) {
-            /*
-            // ok lets try to figure this out from other fields
-            // if the case is owned by a queue e.g. it's just been submitted
-            if (this.email.toAddresses[0].)
-            if (QN_RIC.equals(theCase.Owner.Name)) {
-                reallyParseQueue(QUEUE_RIC);
-            } else if (QN_REDCAP.equals(theCase.Owner.Name)) {
-                reallyParseQueue(QUEUE_REDCAP);
-            } else if (QN_RESEARCH_IT.equals(theCase.Owner.Name)) {
-                reallyParseQueue(QUEUE_RESEARCH_IT);
-            } else {
-                // if the case is owned by a member of a known queue, we can infer which queue applies
-                Set<Id> usersInQ = getUsersInQueueByName(QN_RIC);
-                if (usersInQ.contains(theCase.OwnerId)) {
-                    reallyParseQueue(QUEUE_RIC);
-                } else {
-                    usersInQ = getUsersInQueueByName(QN_REDCAP);
-                    if (usersInQ.contains(theCase.OwnerId)) {
-                        reallyParseQueue(QUEUE_REDCAP);
-                    } else {
-                        usersInQ = getUsersInQueueByName(QN_RESEARCH_IT);
-                        if (usersInQ.contains(theCase.OwnerId)) {
-                            reallyParseQueue(QUEUE_RESEARCH_IT);
-                        }
-                    }
-                }
-            }
-            // meh too complicated, just go with the inference from addressee strategy
-            */
+        if (preselectedQueue.equals(QN_REDCAP)) {
+            reallyParseQueue(QUEUE_REDCAP);
+        } else if (inputString == null || inputString.length() == 0) {
             inferQueueFromAddressee();
         } else {
             reallyParseQueue(inputString);
@@ -935,21 +967,19 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         return userIds;
     }
 
-    private void trimCaseToFit() {
-        theCase.SUnet_ID_case__c = mySubString(theCase.SUnet_ID_case__c, 45);
-        theCase.Subject = mySubString(theCase.Subject, 45);
-        theCase.Availability__c = mySubString(theCase.Availability__c, 45);
-        theCase.Origin = mySubString(theCase.Origin, 45);
-        theCase.Description = mySubString(theCase.Description, 45);
-        theCase.Funding_status__c = mySubString(theCase.Funding_status__c, 45);
-        theCase.IRB_Protocol__c = mySubString(theCase.IRB_Protocol__c, 45);
-        theCase.PI_Name__c = mySubString(theCase.PI_Name__c, 45);
-        theCase.Project_Record_ID__c = mySubString(theCase.Project_Record_ID__c, 45);
-        theCase.Project_Department__c = mySubString(theCase.Project_Department__c , 45);
-        theCase.REDCap_StudyName__c = mySubString(theCase.REDCap_StudyName__c, 45);
-        theCase.Publication_Plans__c = mySubString(theCase.Publication_Plans__c, 45);
-        theCase.CustomOrigin__c = mySubString(theCase.CustomOrigin__c , 45);
-        theCase.Publication_Plans__c = mySubString(theCase.Primary_Category__c, 45);
+    public void trimCaseToFit() {
+        theCase.SUnet_ID_case__c = mySubString(theCase.SUnet_ID_case__c, 49);
+        theCase.Subject = mySubString(theCase.Subject, 254);
+        theCase.Availability__c = mySubString(theCase.Availability__c, 3199);
+        theCase.Description = mySubString(theCase.Description, 3199);
+        theCase.IRB_Protocol__c = mySubString(theCase.IRB_Protocol__c, 49);
+        theCase.PI_Name__c = mySubString(theCase.PI_Name__c, 49);
+        theCase.Project_Record_ID__c = mySubString(theCase.Project_Record_ID__c, 19);
+        theCase.Project_Department__c = mySubString(theCase.Project_Department__c , 99);
+        theCase.REDCap_StudyName__c = mySubString(theCase.REDCap_StudyName__c, 239);
+        theCase.Publication_Plans__c = mySubString(theCase.Publication_Plans__c, 49);
+        theCase.CustomOrigin__c = mySubString(theCase.CustomOrigin__c , 49);
+        theCase.SCI_Sponsor__c = mySubString(theCase.SCI_Sponsor__c , 49);
     }
 
     public Case getExistingCase(Messaging.InboundEmail email) {
