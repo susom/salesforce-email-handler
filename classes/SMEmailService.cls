@@ -138,16 +138,17 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 updateRedcap(theCase.CaseNumber, theCase.Status, theCase.Owner.Name ,true, theCase.Active_Queue__c, theCase.Project_Record_ID__c);
                 latestComment = '' ;
                 // this should reliably work
-                notify((String[]) getEmailByQueueName(queueName), new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CONSULTANT_NEW_CASE_NOTIFICATION));
+                notify((String[]) getEmailByQueueName(queueName), new String[] {}, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CONSULTANT_NEW_CASE_NOTIFICATION));
 
                 // only send out the courtesy notice if the party named as the primary contact is *not* a salesforce user
                 // getSFUser will return null if the supplied email address does not correspond to a SF user
                 if (getSFUser(email.fromAddress) == null) {
                     // this however may trigger an exception if the supplied contact email address was mistyped
                     if (orgProperties.get('shortname').equals('RIC')) {
-                        notify(email.fromAddress, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_ACK_NEW_RIC));
+
+                        notify(email.fromAddress, email.ccAddresses, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_ACK_NEW_RIC));
                     } else {
-                        notify(email.fromAddress, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_ACK_NEW_RIT));
+                        notify(email.fromAddress, email.ccAddresses, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_ACK_NEW_RIT));
                     }
                 }
 
@@ -176,7 +177,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             inferQueueFromAddressee();
 
             // send them a polite note asking them to fill out the web form
-            notifySansReplyPrompt(email.replyTo, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_NACK_UNRECOGNIZED));
+            notifySansReplyPrompt(email.replyTo, email.ccAddresses, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_NACK_UNRECOGNIZED));
 
             // this next section may or may not be what we want; this sends an email notification to a queue
             // include the customer's email in the version sent to the consultants
@@ -199,7 +200,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             // this invocation pattern avoids the 'reply above the line'
 
             latestComment = allComentsForCase(theCase);
-            notifySansReplyPrompt(email.replyTo, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_NACK_ARCHIVED));
+            notifySansReplyPrompt(email.replyTo, email.ccAddresses, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_NACK_ARCHIVED));
             // include the customer's email in the version sent to the consultants
             // when the next line is commented out, the consultation team is not informed
 //            notifySansReplyPrompt(errorQueue(), selectTemplate(EMAIL_TEMPLATE_CUSTOMER_NACK_ARCHIVED));
@@ -260,7 +261,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                     respondent = orgProperties.get('longname');
                     latestComment = allComentsForCase(theCase);
                     System.debug('notifying customer! ' + latestComment);
-                    notify(theCase.Contact.Email, new String[] {'scweber@stanford.edu', email.fromAddress}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
+                    notify(theCase.Contact.Email, email.ccAddresses, new String[] {'scweber@stanford.edu', email.fromAddress}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
                 }
             }
 
@@ -277,12 +278,24 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
 
     private String inferQueueFromAddressee() {
         String inferredQueue;
-        String addressedTo = flattenStringArray(email.toAddresses)+' '+ flattenStringArray(email.ccAddresses);
-        if (addressedTo.containsIgnoreCase('informatics')) {
+        String addressees = flattenStringArray(email.toAddresses)+' '+ flattenStringArray(email.ccAddresses) +' '+email.fromAddress;
+        if (addressees.containsIgnoreCase('informatics')) {
             inferredQueue = QUEUE_RIC;
-        } else if (addressedTo.containsIgnoreCase('redcap')) {
+        } else if (addressees.containsIgnoreCase('yelena')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('eileen')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('anna')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('sabrina')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('steph')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('mina')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('redcap')) {
             inferredQueue = QUEUE_REDCAP;
-        } else if (addressedTo.containsIgnoreCase('rit-support')) {
+        } else if (addressees.containsIgnoreCase('rit-support')) {
             inferredQueue = QUEUE_RESEARCH_IT;
         } else if (((String) email.plainTextBody).containsIgnoreCase('redcap') || ((String) email.subject).containsIgnoreCase('redcap')) {
             // this would be slightly cleaner if populated in a custom field somewhere
@@ -296,8 +309,8 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
 
     private void callForHelp(String troubleReport) {
         System.debug('trouble creating the case: ' + troubleReport);
-        notify(email.replyTo, new String[] {}, 'SMEmailService Error', troubleReport);
-        notify(errorQueue(), new String[] {}, 'SMEmailService Error', troubleReport);
+        notify(email.replyTo, new String[] {}, new String[]{}, 'SMEmailService Error', troubleReport);
+        notify(errorQueue(), new String[] {}, new String[]{}, 'SMEmailService Error', troubleReport);
     }
 
     private void attachCommentToCase(String customerComment, Boolean notify) {
@@ -321,7 +334,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             System.debug('theCase.OwnerId ' + theCase.OwnerId);
             latestComment = allComentsForCase(theCase);
             // XXX TODO the logic here needs work: if the owner is already listed on the email this creates a duplicate
-            notify(getEmailByQueueOrUserId(theCase.OwnerId), new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
+            notify(getEmailByQueueOrUserId(theCase.OwnerId), new String[]{}, new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
         }
     }
 
@@ -399,7 +412,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                     redcapNeedsUpdating = true;
                     parseQueue(theCase.Active_Queue__c);
                     latestComment = removeTags(message).trim();
-                    notify((String[]) getEmailByQueueName(queueName), new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CONSULTANT_NEW_CASE_NOTIFICATION));
+                    notify((String[]) getEmailByQueueName(queueName), new String[]{}, new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CONSULTANT_NEW_CASE_NOTIFICATION));
                 }
 
             } else {
@@ -419,7 +432,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
 
                     // this is a bit of a special case. the default notification below is pinned to the sender
                     // but in this case the new owner is the person who really needs to hear about this action
-                    notifySansReplyPrompt(theUser.Email, new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CONSULTANT_NEW_CASE_NOTIFICATION));
+                    notifySansReplyPrompt(theUser.Email,  new String[]{}, new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CONSULTANT_NEW_CASE_NOTIFICATION));
                 }
             }
         }
@@ -461,9 +474,9 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
 
         if (statusMessage.length() > 0 || latestComment.trim().length() > 0) {
             if (tagMap.keySet().contains('info')) {
-                notifySansReplyPrompt(email.fromAddress, new String[]{}, selectTemplate(EMAIL_TEMPLATE_INFO));
+                notifySansReplyPrompt(email.fromAddress, email.ccAddresses, new String[]{}, selectTemplate(EMAIL_TEMPLATE_INFO));
             } else if (unusualCirumstance) {
-                notifySansReplyPrompt(email.fromAddress, new String[]{}, selectTemplate(EMAIL_TEMPLATE_ACTION));
+                notifySansReplyPrompt(email.fromAddress,  email.ccAddresses, new String[]{}, selectTemplate(EMAIL_TEMPLATE_ACTION));
                 // email.fromAddress handles the case where someone else writes in
                 // was getEmailByQueueOrUserId(theCase.OwnerId)
             }
@@ -477,35 +490,36 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 ! tagMap.keySet().contains('hidden') && ! tagMap.keySet().contains('private'));
     }
 
-    private void notify(String address, String[] bccAddress, EmailTemplate template) {
-        notify(address, bccAddress, template.Subject, END_NEW_MESSAGE_INDICATOR + '\n\n' + template.Body);
+    private void notify(String address, String[] ccAddress, String[] bccAddress, EmailTemplate template) {
+        notify(address, ccAddress, bccAddress, template.Subject, END_NEW_MESSAGE_INDICATOR + '\n\n' + template.Body);
     }
 
-    private void notifySansReplyPrompt(String address, String[] bccAddress, EmailTemplate template) {
-        notify(address, bccAddress, template.Subject, template.Body);
+    private void notifySansReplyPrompt(String address, String[] ccAddress, String[] bccAddress, EmailTemplate template) {
+        notify(address, ccAddress, bccAddress, template.Subject, template.Body);
     }
 
-    private void notify(String[] toAddresses, String[] bccAddress, EmailTemplate template) {
-        notify(toAddresses, bccAddress, template.Subject, END_NEW_MESSAGE_INDICATOR + '\n\n' + template.Body);
+    private void notify(String[] toAddresses, String[] ccAddress, String[] bccAddress, EmailTemplate template) {
+        notify(toAddresses, ccAddress, bccAddress, template.Subject, END_NEW_MESSAGE_INDICATOR + '\n\n' + template.Body);
     }
 
-    private void notifySansReplyPrompt(String[] toAddresses, String[] bccAddress, EmailTemplate template) {
-        notify(toAddresses, bccAddress, template.Subject, template.Body);
+    private void notifySansReplyPrompt(String[] toAddresses, String[] ccAddress, String[] bccAddress, EmailTemplate template) {
+        notify(toAddresses, ccAddress, bccAddress, template.Subject, template.Body);
     }
 
-    private void notify(String address, String[] bccAddress, String subject, String message) {
-        notify(new String[] {address}, bccAddress, subject, message);
+    private void notify(String address, String[] ccAddress,  String[] bccAddress, String subject, String message) {
+        notify(new String[] {address}, ccAddress, bccAddress, subject, message);
     }
 
-    private void notify(String[] toAddresses, String[] bccAddress, String subject, String message) {
-        notify(toAddresses, bccAddress, subject, message, true);
+    private void notify(String[] toAddresses, String[] ccAddress, String[] bccAddress, String subject, String message) {
+        notify(toAddresses, ccAddress, bccAddress, subject, message, true);
     }
 
-    private void notify(String[] toAddresses, String[] bccAddresses, String subject, String message, Boolean emailOnException) {
+    private void notify(String[] toAddresses, String[] ccAddresses, String[] bccAddresses, String subject, String message, Boolean emailOnException) {
         try {
             Messaging.SingleEmailMessage outbound = new Messaging.SingleEmailMessage();
             System.debug('toAddress field is ' + toAddresses + ' subject is ' + subject + ' and message is ' + message);
             outbound.toAddresses = toAddresses;
+            outbound.ccAddresses = ccAddresses;
             outbound.bccAddresses = bccAddresses;
             outbound.setSubject('Re: ' + subject);
             outbound.setPlainTextBody(message);
@@ -535,7 +549,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             if (emailOnException) {
                 String errorMessage = 'ERROR line ' +e.getLineNumber()+' '+e.getMessage()+'\n\nAttempting to email '
                         +toAddresses+'\n\n'+subject+'\n\n'+message;
-                notify(new String[] {'scweber@stanford.edu'}, new String[]{}, 'Salesforce Error', errorMessage, false);
+                notify(new String[] {'scweber@stanford.edu'}, new String[]{}, new String[]{}, 'Salesforce Error', errorMessage, false);
             }
         }
     }
@@ -575,8 +589,8 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 FromAddress = email.fromAddress,
                 FromName = email.fromName,
                 Subject =  email.subject,
-                TextBody = makeDescription(email),
-                HtmlBody = email.htmlBody,
+                TextBody = mySubString(makeDescription(email), 31995),
+                HtmlBody = mySubString(email.htmlBody, 31995),
                 Incoming = true,
                 Status = '0',		//'0' = New,'1' = Read,'2' = Replied,'3' = Sent,'4' = Forwarded
                 ParentId = theCase.Id
