@@ -9,7 +9,7 @@ global class SMRCEmailService implements Messaging.InboundEmailHandler  {
     global Messaging.InboundEmailResult handleInboundEmail(Messaging.InboundEmail param1, Messaging.InboundEnvelope param2)
     {
         helper.setSendCaseCommentToCustomer(true);
-        helper.setPreselectedQueueRedcap();
+      //  helper.setPreselectedQueueRedcap();
         return helper.handleInboundEmail(param1, param2);
     }
 

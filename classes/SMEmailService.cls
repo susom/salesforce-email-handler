@@ -31,9 +31,9 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     private static final String QN_REDCAP = 'REDCap Queue';
     private static final String QN_RESEARCH_IT = 'Research IT Queue';
     private static final String QN_RIC = 'Consult Request Queue';
-    private static final String QUEUE_REDCAP = 'queuename='+QN_REDCAP+';shortname=REDCap Help;longname=REDCap Support;url=http://redcap.stanford.edu/redcap/plugins/gethelp/redcap.php;email=redcap-help@stanford.edu';
-    private static final String QUEUE_RESEARCH_IT = 'queuename='+QN_RESEARCH_IT+';shortname=Research IT;longname=Research IT;url=http://redcap.stanford.edu/redcap/plugins/gethelp/rit.php;email=rit-support@stanford.edu';
-    private static final String QUEUE_RIC = 'queuename='+QN_RIC+';shortname=RIC;longname=Research Informatics Center;url=https://ric-help.med.stanford.edu/;email=ric-support@stanford.edu';
+    private static final String QUEUE_REDCAP = 'queuename='+QN_REDCAP+';shortname=REDCap Help;longname=REDCap Support;url=http://redcap.stanford.edu/redcap/plugins/gethelp/redcap-support.html;email=redcap-help@stanford.edu';
+    private static final String QUEUE_RESEARCH_IT = 'queuename='+QN_RESEARCH_IT+';shortname=Research IT;longname=Research IT;url=http://redcap.stanford.edu/redcap/plugins/gethelp/rit-support.html;email=rit-support@stanford.edu';
+    private static final String QUEUE_RIC = 'queuename='+QN_RIC+';shortname=RIC;longname=Research Informatics Center;url=https://med.stanford.edu/ric/;email=ric-support@stanford.edu';
 
     Boolean sendCaseCommentToCustomer = false;
     private String statusMessage   = '';
@@ -43,15 +43,15 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     public Messaging.InboundEmail email; /* public for test case coverage */
     private Map<String,String> orgProperties = new Map<String,String>();
     public String respondent = '';
-    private String preselectedQueue = '';
+//    private String preselectedQueue = '';
 
     public void setSendCaseCommentToCustomer(boolean sendCaseCommentToCustomer) {
         this.sendCaseCommentToCustomer = sendCaseCommentToCustomer;
     }
 
-    public void setPreselectedQueueRedcap() {
-        this.preselectedQueue = QN_REDCAP;
-    }
+//    public void setPreselectedQueue(String queueName) {
+//        this.preselectedQueue = queueName;
+//    }
 
     global Messaging.InboundEmailResult handleInboundEmail(Messaging.InboundEmail inboundEmail, Messaging.InboundEnvelope envelope) {
         Messaging.InboundEmailResult result = new Messaging.InboundEmailResult();
@@ -65,6 +65,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         }
         System.debug('subject is ' + subject);
         System.debug('email is from ' + inboundEmail.fromAddress);
+        System.debug('email replyTo ' + inboundEmail.replyTo);
         System.debug('addressee is ' + inboundEmail.toAddresses);
         System.debug('cc list is ' + flattenStringArray(inboundEmail.ccAddresses));
         System.debug(' list for inference ' + flattenStringArray(inboundEmail.toAddresses)+' '+ flattenStringArray(inboundEmail.ccAddresses));
@@ -115,18 +116,22 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                 trimCaseToFit();
                 theCase.ContactId = theContact.Id;
 
-                System.debug ('line 90 theCase.Active_Queue__c ' + theCase.Active_Queue__c);
+                System.debug ('line 119 theCase.Active_Queue__c ' + theCase.Active_Queue__c);
                 // this populates the orgProperties map used by many of the templated email responses
                 // to see what strings show up in Active_Queue__c just check the source for
                 // https://redcap.stanford.edu/plugins/gethelp/ric.php, rit.php and redcap.php
                 if (theCase.Active_Queue__c == null || ''.equals(theCase.Active_Queue__c)) {
                     theCase.Active_Queue__c = inferQueueFromAddressee();
                 }
+                System.debug ('line 126 theCase.Active_Queue__c ' + theCase.Active_Queue__c);
                 parseQueue(theCase.Active_Queue__c);
 
                 String queueName = orgProperties.get('queuename');
+                System.debug('looking up queue by name ' + queueName);
                 List<Group> groupIdList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :queueName];
+                System.debug('looking for owner ; found queue '+groupIdList);
                 if (!groupIdList.isEmpty()) {
+                    System.debug('bingo, assigning case ownership to this queue');
                     theCase.OwnerId = groupIdList.get(0).Id;
                 }
 
@@ -174,7 +179,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             // has written a new email that does not refer to a known case.
             // we can infer which queue they were trying to reach by inspecting the email address they used
             // rit-support , redcap, and informatics are the three possibilities
-            inferQueueFromAddressee();
+            parseQueue(inferQueueFromAddressee());
 
             // send them a polite note asking them to fill out the web form
             notifySansReplyPrompt(email.replyTo, email.ccAddresses, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_NACK_UNRECOGNIZED));
@@ -279,13 +284,15 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     private String inferQueueFromAddressee() {
         String inferredQueue;
         String addressees = flattenStringArray(email.toAddresses)+' '+ flattenStringArray(email.ccAddresses) +' '+email.fromAddress;
+        System.debug('addressees ' + addressees);
+
         if (addressees.containsIgnoreCase('informatics')) {
             inferredQueue = QUEUE_RIC;
         } else if (addressees.containsIgnoreCase('yelena')) {
             inferredQueue = QUEUE_RIC;
         } else if (addressees.containsIgnoreCase('eileen')) {
             inferredQueue = QUEUE_RIC;
-        } else if (addressees.containsIgnoreCase('anna')) {
+        } else if (addressees.containsIgnoreCase('anna') || addressees.containsIgnoreCase('graber')) {
             inferredQueue = QUEUE_RIC;
         } else if (addressees.containsIgnoreCase('sabrina')) {
             inferredQueue = QUEUE_RIC;
@@ -293,17 +300,32 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             inferredQueue = QUEUE_RIC;
         } else if (addressees.containsIgnoreCase('mina')) {
             inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('archana')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('andy')) {
+            inferredQueue = QUEUE_REDCAP;
+        } else if (addressees.containsIgnoreCase('alvaro')) {
+            inferredQueue = QUEUE_REDCAP;
+        } else if (addressees.containsIgnoreCase('ryan')) {
+            inferredQueue = QUEUE_REDCAP;
+        } else if (addressees.containsIgnoreCase('jae')) {
+            inferredQueue = QUEUE_REDCAP;
         } else if (addressees.containsIgnoreCase('redcap')) {
             inferredQueue = QUEUE_REDCAP;
         } else if (addressees.containsIgnoreCase('rit-support')) {
             inferredQueue = QUEUE_RESEARCH_IT;
-        } else if (((String) email.plainTextBody).containsIgnoreCase('redcap') || ((String) email.subject).containsIgnoreCase('redcap')) {
+        } else if (addressees.containsIgnoreCase('weber')) {
+            inferredQueue = QUEUE_RESEARCH_IT;
+        } else if (((String) email.plainTextBody).containsIgnoreCase('redcap') || ((String) email.subject).containsIgnoreCase('redcap') || ((String)email.replyTo).containsIgnoreCase('redcap')) {
             // this would be slightly cleaner if populated in a custom field somewhere
             inferredQueue = QUEUE_REDCAP;
+        } else if (((String) email.replyTo).containsIgnoreCase('rit-support')) {
+            inferredQueue = QUEUE_RESEARCH_IT;
         } else  {
+            System.debug('inferQueueFromAddressee() default queue');
             inferredQueue = QUEUE_RIC;
         }
-        parseQueue(inferredQueue);
+
         return inferredQueue;
     }
 
@@ -778,13 +800,14 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     private void parseQueue(String inputString) {
         // theCase.Active_Queue__c comes in the following format
         // queuename=Consult Request Queue;shortname=RIC;longname=Research Informatics Center;url=https://ric-help.med.stanford.edu/;email=ric-support@stanford.edu
-        if (preselectedQueue.equals(QN_REDCAP)) {
-            reallyParseQueue(QUEUE_REDCAP);
-        } else if (inputString == null || inputString.length() == 0) {
-            inferQueueFromAddressee();
-        } else {
-            reallyParseQueue(inputString);
+//        if (preselectedQueue.equals(QN_REDCAP)) {
+//            reallyParseQueue(QUEUE_REDCAP);
+//        } else
+        if (inputString == null || inputString.length() == 0) {
+            System.debug('line 807 inferring queue from addressee ' );
+            inputString = inferQueueFromAddressee();
         }
+        reallyParseQueue(inputString);
     }
 
     private void reallyParseQueue(String inputString) {
