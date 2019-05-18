@@ -204,7 +204,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             // TODO archived case, so when the user clicks on the link to the intake form, the related case field is pre-populated
             // this invocation pattern avoids the 'reply above the line'
 
-            latestComment = allComentsForCase(theCase);
+            latestComment = allCommentsForCase(theCase);
             notifySansReplyPrompt(email.replyTo, email.ccAddresses, new String[] {'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CUSTOMER_NACK_ARCHIVED));
             // include the customer's email in the version sent to the consultants
             // when the next line is commented out, the consultation team is not informed
@@ -242,7 +242,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         // now we just need to figure out who sent it, a consultant or a customer
         invokingUser = getSFUser(email.fromAddress);
         System.debug('invokingUser is '+invokingUser);
-        if (invokingUser != null) {
+        if (invokingUser != null && ! sendingToSelf()) {
             // the consultant is responding and possibly specifying some action
 
             Boolean isPublicComment = executeActionTags(latestComment);
@@ -258,15 +258,30 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
 
                 attachCommentToCase(latestComment, false); // important! do not notify the owner - changing false to true here leads to an infinite notification loop
 
+                String whatwefound ='from '+inboundEmail.fromAddress+ '; to '+inboundEmail.toAddresses+ '; this is the cc list ' +inboundEmail.ccAddresses+
+                        '; and this the bool ' + containsSupport(inboundEmail.ccAddresses) +
+                        '. Also sendCaseCommentToCustomer  is '+sendCaseCommentToCustomer +'. org is '+orgProperties.get('longname') +
+                        '; active queue: '+theCase.Active_Queue__c+'; inferred Q: '+ inferQueueFromAddressee();
+
+                notify(new String[] {'scweber@stanford.edu'}, new String[] {}, new String[] {}, 'SF debug', whatwefound, false);
+
                 // if it should go out to the customer, send it
                 // note the while sendCaseCommentToCustomer is initialized to false, there is a constructor
                 // that sets it to true that is invoked by the REDCapEmailHandler
                 System.debug('considering sending comment to case ' + sendCaseCommentToCustomer+' '+isPublicComment);
-                if (sendCaseCommentToCustomer && isPublicComment) {
+                if (sendCaseCommentToCustomer && isPublicComment && ! containsSupport(inboundEmail.ccAddresses)) {
                     respondent = orgProperties.get('longname');
-                    latestComment = allComentsForCase(theCase);
+                    latestComment = allCommentsForCase(theCase);
                     System.debug('notifying customer! ' + latestComment);
-                    notify(theCase.Contact.Email, email.ccAddresses, new String[] {'scweber@stanford.edu', email.fromAddress}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
+                    String[] loopPrevention = new String[] {theCase.Contact.Email};
+                    // if the case has been assigned to the SF User with the same email as inbound notifications
+                    // this will cause an infinite notification loop. So double check!
+                    if (scrub(loopPrevention).size() > 0) {
+                        // also remove all references to the inbound email address from cc- and b-cc lists
+                        notify(theCase.Contact.Email, new String[]{}, scrub(new String[]{
+                                'scweber@stanford.edu'
+                        }), selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
+                    }
                 }
             }
 
@@ -281,12 +296,83 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         return result;
     }
 
+    private boolean sendingToSelf() {
+        // this is a corner case, but when a comment is created on a case in salesforce, it triggers an outbound email
+        // which then seems to trigger this handler. Since the comment is already on the case, there's no point
+        // in adding a new one.
+        // we're looking for the case where the to and from emails are exactly the same in which case return false
+        if (email.toAddresses != null && email.toAddresses[0].equals(email.fromAddress)) {
+            return true;
+        }
+        Integer endPos = ((String) email.plainTextBody).indexOf('*** NEW CASE ASSIGNMENT NOTIFICATION ***');
+        // extend this to also filter out email-to-case plugin notifications
+        if (endPos >= 0) {
+            return true;
+        }
+        return false;
+    }
+
+//    private String normalizeBlankSpace(String incomingString) {
+//        String outString = incomingString.replaceAll('\\t',' ').replaceAll('  ', ' ');
+//        if (incomingString.length() < outString.length()) {
+//            return normalizeBlankSpace(outString);
+//        }
+//        return outString;
+//    }
+
+    public boolean containsSupport (String[] emailStrings) {
+        // remove the inbound email address from the addressee list to avoid creating an email loop
+        if (emailStrings == null) {
+            return true;
+        }
+        for (String emailString: emailStrings) {
+            if (! containsSupportStr(emailString)) {
+               return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean containsSupportStr (String emailString) {
+        System.debug('emailString ' + emailString);
+        System.debug('emailString != null ' + emailString != null);
+        if (emailString != null) System.debug('emailString.contains(-support) ' + emailString.contains('-support'));
+        if (orgProperties != null) System.debug('orgProperties.get(email) ' + orgProperties.get('email'));
+        System.debug('pareDownEmail(emailString) ' + pareDownEmail(emailString));
+        if (orgProperties != null) System.debug('fred '+pareDownEmail(orgProperties.get('email')));
+        //System.debug('george '+pareDownEmail(emailString).equals(pareDownEmail(orgProperties.get('email'))));
+
+        if (emailString != null && (emailString.contains('-support') ||
+                (orgProperties != null && orgProperties.get('email') != null &&  pareDownEmail(emailString).equals(pareDownEmail(orgProperties.get('email')))))) {
+            System.debug('returning true for input '+emailString);
+            return true;
+        }
+        System.debug('returning false for input '+emailString);
+        return false;
+    }
+
+    public String[] scrub (String[] emailStrings) {
+        // remove the inbound email address from the addressee list to avoid creating an email loop
+        String[] newEmailStrings = new String[]{};
+        if (emailStrings == null) {
+            return newEmailStrings;
+        }
+        for (String emailString: emailStrings) {
+            if (! containsSupportStr(emailString)) {
+                newEmailStrings.add(emailString);
+            }
+        }
+        return newEmailStrings;
+    }
+
     private String inferQueueFromAddressee() {
         String inferredQueue;
         String addressees = flattenStringArray(email.toAddresses)+' '+ flattenStringArray(email.ccAddresses) +' '+email.fromAddress;
         System.debug('addressees ' + addressees);
 
         if (addressees.containsIgnoreCase('informatics')) {
+            inferredQueue = QUEUE_RIC;
+        } else if (addressees.containsIgnoreCase('ric-support')) {
             inferredQueue = QUEUE_RIC;
         } else if (addressees.containsIgnoreCase('yelena')) {
             inferredQueue = QUEUE_RIC;
@@ -306,7 +392,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             inferredQueue = QUEUE_REDCAP;
         } else if (addressees.containsIgnoreCase('alvaro')) {
             inferredQueue = QUEUE_REDCAP;
-        } else if (addressees.containsIgnoreCase('ryan')) {
+        } else if (addressees.containsIgnoreCase('rval')) {
             inferredQueue = QUEUE_REDCAP;
         } else if (addressees.containsIgnoreCase('jae')) {
             inferredQueue = QUEUE_REDCAP;
@@ -319,17 +405,20 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         } else if (((String) email.plainTextBody).containsIgnoreCase('redcap') || ((String) email.subject).containsIgnoreCase('redcap') || ((String)email.replyTo).containsIgnoreCase('redcap')) {
             // this would be slightly cleaner if populated in a custom field somewhere
             inferredQueue = QUEUE_REDCAP;
-        } else if (((String) email.replyTo).containsIgnoreCase('rit-support')) {
-            inferredQueue = QUEUE_RESEARCH_IT;
         } else  {
             System.debug('inferQueueFromAddressee() default queue');
             inferredQueue = QUEUE_RIC;
         }
 
+        if (inferredQueue == QUEUE_RIC) {
+            sendCaseCommentToCustomer = false;
+        } else {
+            sendCaseCommentToCustomer = true;
+        }
         return inferredQueue;
     }
 
-    private void callForHelp(String troubleReport) {
+    public void callForHelp(String troubleReport) {
         System.debug('trouble creating the case: ' + troubleReport);
         notify(email.replyTo, new String[] {}, new String[]{}, 'SMEmailService Error', troubleReport);
         notify(errorQueue(), new String[] {}, new String[]{}, 'SMEmailService Error', troubleReport);
@@ -340,7 +429,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         latestComment =  getDateAndTime() + ' ' +(email.fromName == null ? email.fromAddress : email.fromName)+ ' wrote:\n' + customerComment;
         String commentForInsertion = latestComment.substring(0, Math.min(latestComment.length(),3800));
         System.debug('new comment length' + commentForInsertion.length());
-        CaseComment comment = new CaseComment(CommentBody=commentForInsertion, ParentId=theCase.Id, IsPublished=true);
+        CaseComment comment = new CaseComment(CommentBody=commentForInsertion, ParentId=theCase.Id, IsPublished=notify);
         // then add their comment to the case
         insert comment;
 
@@ -354,17 +443,19 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             // the case in question may still be owned by the queue,
             // so use the info in the case rather than the reply-to when notifying the consultant(s)
             System.debug('theCase.OwnerId ' + theCase.OwnerId);
-            latestComment = allComentsForCase(theCase);
+            latestComment = allCommentsForCase(theCase);
             // XXX TODO the logic here needs work: if the owner is already listed on the email this creates a duplicate
             notify(getEmailByQueueOrUserId(theCase.OwnerId), new String[]{}, new String[]{'scweber@stanford.edu'}, selectTemplate(EMAIL_TEMPLATE_CASE_NOTIFY_NEW_COMMENT));
         }
     }
 
-    private String allComentsForCase(Case aCase) {
-        List<CaseComment> commentList = [SELECT Id, CommentBody, CreatedDate FROM CaseComment WHERE ParentId = :theCase.Id ORDER BY CreatedDate DESC] ;
+    public String allCommentsForCase(Case aCase) {
+        List<CaseComment> commentList = [SELECT Id, CommentBody, CreatedDate, isPublished FROM CaseComment WHERE ParentId = :theCase.Id ORDER BY CreatedDate DESC] ;
         String allComments = '';
         for (CaseComment aComment : commentList)   {
-            allComments += aComment.CommentBody + '\n\n';
+            if (aComment.isPublished) {
+                allComments += aComment.CommentBody + '\n\n';
+            }
         }
 
         allComments = allComments + 'Original Request:\n' + aCase.Description;
@@ -787,8 +878,8 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         List<User> usrList = [SELECT Id, FirstName, LastName, Name, Email, Alias FROM User WHERE IsActive = TRUE];
         for(User usr : usrList) {
             System.debug('adding ' + usr.Email.toLowerCase() + ' and ' +usr.Alias.toLowerCase() + ' to emailToUser map');
-            emailToUser.put(usr.Email.toLowerCase(), usr);
-            emailToUser.put(usr.Alias.toLowerCase(), usr);
+            emailToUser.put(pareDownEmail(usr.Email.toLowerCase()), usr);
+            emailToUser.put(pareDownEmail(usr.Alias.toLowerCase()), usr);
         }
         System.debug('getSFUser emailToUser ' +emailToUser);
         System.debug('getSFUser emailOrAlias' + emailOrAlias);
@@ -1145,6 +1236,9 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     }
 
     public String pareDownEmail(String content) {
+        if (content == null) {
+            return null;
+        }
         Pattern tagPattern = Pattern.compile(EMAIL_REGEX);
         Matcher myMatcher = tagPattern.matcher(content);
         if (myMatcher.find()) {

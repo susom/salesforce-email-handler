@@ -67,16 +67,60 @@ private class SMEmailServiceTest {
         return emailServObj;
     }
 
-    @isTest public static void validateNewCaseCreation() {
+    @isTest public static void validateStringHtml() {
+
+        String strippedString = SMEmailService.stripHtml('<p>this is a test</p>');
+        System.assertEquals('this is a test', strippedString.trim());
+    }
+
+    @isTest public static void validateSendCaseCommentToCustomer() {
+        SMEmailService emailServObj = new SMEmailService();
+        emailServObj.setSendCaseCommentToCustomer(true);
+    }
+
+    @isTest public static void validateNewCaseCreation1() {
         setup();
+        validateNewCaseCreation('informatics@noorg.edu');
+        validateNewCaseCreation('ric-support@noorg.edu');
+        validateNewCaseCreation('yelena@noorg.edu');
+        validateNewCaseCreation('eileen@noorg.edu');
+    }
+
+    @isTest public static void validateNewCaseCreation3() {
+        setup();
+        validateNewCaseCreation('anna@noorg.edu');
+        validateNewCaseCreation('sabrina@noorg.edu');
+        validateNewCaseCreation('steph@noorg.edu');
+        validateNewCaseCreation('mina@noorg.edu');
+        validateNewCaseCreation('archana@noorg.edu');
+    }
+
+    @isTest public static void validateNewCaseCreation4() {
+        setup();
+        validateNewCaseCreation('andy@noorg.edu');
+        validateNewCaseCreation('alvaro@noorg.edu');
+        validateNewCaseCreation('rval@noorg.edu');
+    }
+
+    @isTest public static void validateNewCaseCreation2() {
+        setup();
+        validateNewCaseCreation('jae@noorg.edu');
+        validateNewCaseCreation('redcap@noorg.edu');
+        validateNewCaseCreation('rit-support@noorg.edu');
+        validateNewCaseCreation('weber@noorg.edu');
+        validateNewCaseCreation('informatics@noorg.edu');
+    }
+
+    public static void validateNewCaseCreation(String addressee) {
+
         SMEmailService emailServObj = new SMEmailService();
         Messaging.InboundEmail email = new Messaging.InboundEmail();
         Messaging.InboundEnvelope env = new Messaging.InboundEnvelope();
         email.toAddresses = new String[]{
-                'test@noorg.edu'
+                addressee
         };
         email.subject = 'test';
-        email.fromName = 'scweber';
+        email.fromName = 'test';
         email.fromAddress = 'test@noorg.edu';
         email.replyTo = 'nobody';
         emailServObj.respondent = 'ditto';
@@ -87,9 +131,36 @@ private class SMEmailServiceTest {
 
         System.runAs (thisUser) {
             Messaging.Inboundemailresult result = emailServObj.handleInboundEmail(email, env);
-
+            String latestComment = emailServObj.allCommentsForCase(emailServObj.theCase);
             System.assertEquals(result.success, true);
         }
+    }
+
+    @isTest public static void validateCallForHelp() {
+        setup();
+
+        SMEmailService emailServObj = new SMEmailService();
+        Messaging.InboundEmail email = new Messaging.InboundEmail();
+        Messaging.InboundEnvelope env = new Messaging.InboundEnvelope();
+        email.toAddresses = new String[]{
+                'fred@jones.org'
+        };
+        email.subject = 'test';
+        email.fromName = 'test';
+        email.fromAddress = 'test@noorg.edu';
+        email.replyTo = 'nobody';
+        emailServObj.respondent = 'ditto';
+        email.plainTextBody = TEST_JSON;
+        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
+
+        // Insert account as current user
+
+        System.runAs (thisUser) {
+            Messaging.Inboundemailresult result = emailServObj.handleInboundEmail(email, env);
+            emailServObj.callForHelp('help');
+            System.assertEquals(result.success, true);
+        }
+
     }
 
     @isTest public static void validateIncomingEmailNotInReferenceToExistingCase() {
@@ -193,42 +264,42 @@ private class SMEmailServiceTest {
         }
     }
 
-//    @isTest public static  void validateCaseResponseArchived() {
-//
-//        SMEmailService emailServObj = setupEmailService();
-//        Messaging.InboundEmail email = new Messaging.InboundEmail();
-//        Messaging.InboundEnvelope env = new Messaging.InboundEnvelope();
-//        email.toAddresses = new String[]{
-//                'test@noorg.edu'
-//        };
-//        email.subject = 'test';
-//        email.fromName = 'scweber';
-//        email.fromAddress = 'test@noorg.edu';
-//        email.replyTo = 'nobody@stanford.edu';
-//        emailServObj.respondent = 'ditto';
-//        email.plainTextBody = 'some inquiry';
-//
-//        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
-//        System.runAs (thisUser) {
-//
-//            // ok, now look up the case and send a response email
-//            List<Case> caseList = [SELECT Id, CaseNumber, reference__c, Description, Subject,OwnerId, Owner.Id, Owner.Name, Project_Record_ID__c FROM Case ];
-//            if (caseList.size() > 0) {
-//                Case theCase = caseList.get(0);
-//                theCase.Status = SMEmailService.STATE_ARCHIVED;
-//                update theCase;
-//                System.debug('found case found after insertion '+theCase.Project_Record_ID__c);
-//                email.subject =  SMEmailService.SUBJECT_PREFIX  + theCase.Project_Record_ID__c;
-//                email.plainTextBody = 'Hi, this is not so random';
-//
-//                result = emailServObj.handleInboundEmail(email, env);
-//
-//                System.assertEquals(result.success, true);
-//            } else {
-//                System.debug('no cases found after insertion');
-//            }
-//        }
-//    }
+    @isTest public static  void validateCaseResponseArchived() {
+
+        SMEmailService emailServObj = setupEmailService();
+        Messaging.InboundEmail email = new Messaging.InboundEmail();
+        Messaging.InboundEnvelope env = new Messaging.InboundEnvelope();
+        email.toAddresses = new String[]{
+                'test@noorg.edu'
+        };
+        email.subject = 'test';
+        email.fromName = 'scweber';
+        email.fromAddress = 'test@noorg.edu';
+        email.replyTo = 'nobody@stanford.edu';
+        emailServObj.respondent = 'ditto';
+        email.plainTextBody = 'some inquiry';
+
+        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
+        System.runAs (thisUser) {
+            Messaging.InboundEmailResult result = emailServObj.handleInboundEmail(email, env);
+            // ok, now look up the case and send a response email
+            List<Case> caseList = [SELECT Id, CaseNumber, reference__c, Description, Subject,OwnerId, Owner.Id, Owner.Name, Project_Record_ID__c FROM Case ];
+            if (caseList.size() > 0) {
+                Case theCase = caseList.get(0);
+                theCase.Status = SMEmailService.STATE_ARCHIVED;
+                update theCase;
+                System.debug('found case found after insertion '+theCase.Project_Record_ID__c);
+                email.subject =  SMEmailService.SUBJECT_PREFIX  + theCase.Project_Record_ID__c;
+                email.plainTextBody = 'Hi, this is not so random';
+
+                result = emailServObj.handleInboundEmail(email, env);
+
+                System.assertEquals(result.success, true);
+            } else {
+                System.debug('no cases found after insertion');
+            }
+        }
+    }
 
     @isTest static void validatePareDownEmail() {
         SMEmailService emailServObj = new SMEmailService();
@@ -382,6 +453,36 @@ private class SMEmailServiceTest {
         }
     }
 
+    @isTest static void validateOpenWhenAlreadyOwned() {
+        setup();
+        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
+        Group theQueu = theQueuList.get(0);
+        SMEmailService emailServObj = setupEmailService();
+        emailServObj.theCase.Status = 'Open';
+        String actionTags = '@open';
+
+        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
+        emailServObj.invokingUser = thisUser;
+        emailServObj.theCase.OwnerId = thisUser.Id;
+
+        // Insert account as current user
+        String uniqueUserName = 'standarduser' + DateTime.now().getTime() + '@testorg.com';
+        // This code runs as the system user
+        Profile p = [SELECT Id FROM Profile WHERE Name='Standard User'];
+        User u = new User(Alias = 'standt', Email='standarduser@testorg.com',
+        EmailEncodingKey='UTF-8', LastName='Testing', LanguageLocaleKey='en_US',
+        LocaleSidKey='en_US', ProfileId = p.Id,
+        TimeZoneSidKey='America/Los_Angeles',
+        UserName=uniqueUserName);
+        System.runAs(u) {
+
+            Boolean isok = emailServObj.executeActionTags(actionTags);
+            System.assertEquals(isok, true);
+
+
+        }
+    }
+
 
     @isTest static void validateLaborActionTag() {
         setup();
@@ -398,6 +499,29 @@ private class SMEmailServiceTest {
 
         System.runAs (thisUser) {
             Boolean isok = emailServObj.executeActionTags(actionTags);
+            System.assertEquals(isok, true);
+            System.assertEquals(emailServObj.theCase.OwnerId, UserInfo.getUserId());
+
+        }
+    }
+
+
+    @isTest static void validateUpdateLaborActionTag() {
+        setup();
+        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
+        Group theQueu = theQueuList.get(0);
+        SMEmailService emailServObj = setupEmailService();
+        emailServObj.theCase.Status = 'Submitted';
+        String actionTags = '@labor=2';
+
+        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
+        emailServObj.invokingUser = thisUser;
+
+        // Insert account as current user
+
+        System.runAs (thisUser) {
+            Boolean isok = emailServObj.executeActionTags(actionTags);
+            isok = emailServObj.executeActionTags(actionTags);
             System.assertEquals(isok, true);
             System.assertEquals(emailServObj.theCase.OwnerId, UserInfo.getUserId());
 
@@ -427,11 +551,21 @@ private class SMEmailServiceTest {
 
     @isTest static void validateAssignActionTag() {
         setup();
+        validateAssignActionTag('testy');
+        validateAssignActionTag('ric');
+        validateAssignActionTag('rit');
+        validateAssignActionTag('redcap');
+        validateAssignActionTag('fred');
+
+    }
+
+    static void validateAssignActionTag(String user) {
+
         List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
         Group theQueu = theQueuList.get(0);
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
-        String actionTags = '@assign=testy';
+        String actionTags = '@assign=' + user;
 
         User thisUser = [SELECT Id, Name FROM User WHERE Id = :UserInfo.getUserId()];
         emailServObj.invokingUser = thisUser;
@@ -444,6 +578,37 @@ private class SMEmailServiceTest {
             System.assertNotEquals(emailServObj.theCase.OwnerId, UserInfo.getUserId());
 
         }
+    }
+
+    @isTest static void validateDoesNotContainSupport() {
+        setup();
+        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
+        Group theQueu = theQueuList.get(0);
+        SMEmailService emailServObj = setupEmailService();
+        emailServObj.theCase.Status = 'Submitted';
+
+        User thisUser = [SELECT Id FROM User WHERE Id = :UserInfo.getUserId()];
+        emailServObj.invokingUser = thisUser;
+
+        // Insert account as current user
+
+        System.runAs (thisUser) {
+            Boolean isok = emailServObj.containsSupport(new String[] {'irt-support@foo.com'});
+            System.assertEquals(isok, true);
+            isok =  emailServObj.containsSupport(new String[] {'fred@foo.com'});
+            System.assertEquals(isok, false);
+            String[] returnList = emailServObj.scrub(new String[] {'irt-support@foo.com'});
+            System.debug('return list is '+returnList);
+            System.debug('return list size is '+ returnList.size());
+            System.assertEquals(returnList.size() , 0);
+            returnList = emailServObj.scrub(new String[] {'fred@foo.com'});
+            System.assertNotEquals(returnList.size() , 0);
+            isOk = emailServObj.containsSupportStr(null);
+            System.assertEquals(isok, false);
+            returnList = emailServObj.scrub(null);
+            System.assertEquals(returnList, new String[]{});
+        }
+
     }
 
     @isTest static void validateInfoActionTag() {
