@@ -71,6 +71,9 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         System.debug(' list for inference ' + flattenStringArray(inboundEmail.toAddresses)+' '+ flattenStringArray(inboundEmail.ccAddresses));
         // the first serious possibility to consider is that this is a submission from a web intake form
         // that references an existing case
+        //
+        // Attach comment to existing case from web intake form (see below for adding comments via email)
+        //
         if (String.isNotBlank(subject) && subject.length() > SUBJECT_PREFIX.length() && SUBJECT_PREFIX.equals(subject.substring(0, subjectPrefixLen))) {
             try {
                 theCase = (Case)getCaseByRedcapId(subject.substring(subjectPrefixLen));
@@ -94,12 +97,13 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             body = EncodingUtil.base64Decode(body.replaceAll('(\\r|\\n|\\s)+','')).toString();
         }
         System.debug('2- body is now '+body);
+        //
+        //  new case creation
+        //
         if (String.isNotBlank(body) && body.length() > jsonPrefixLen && JSON_PREFIX.equals(body.substring(0, jsonPrefixLen))) {
             try {
-                // because the REDCap emailer seems to break up the email into lines,
+                // because the REDCap emailer seems to break up the email into lines, we now send urlencoded content, so
                 // strip out all unescaped newlines before proceeding
-//                Pattern lineBreaks = Pattern.compile('[\n\r]');
-//                body = lineBreaks.matcher(body).replaceAll('');
                 body =  body.replaceAll('(\\r|\\n)+','');
                 System.debug('creating a new case from body ' + body);
 
@@ -164,6 +168,10 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             return result;
         }
 
+        //
+        // handle unformatted email
+        //
+
         // at this point we've dealt with the possibility that the body was JSON,
         // so there are now only four possibilities left :
         // 1. the email does not refer to a known case
@@ -171,7 +179,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         // 3. the consultant is responding and possibly specifying some action
         // 4. the customer is commenting
         //
-        // let's see if it is a reply to an existing case. this will return null if not found
+        // let's see if it is a reply to an existing case. getExistingCase() will return null if not found
         theCase = getExistingCase(email);
 
         if (theCase == null) {
@@ -192,7 +200,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             return result;
         }
 
-        // this populates the orgProperties map used by many of the templated email responses
+        // parseQueue() populates the orgProperties map used by many of the templated email responses
         // to see what strings show up in Active_Queue__c just check the source for
         // https://redcap.stanford.edu/plugins/gethelp/ric.php, rit.php and redcap.php
         parseQueue(theCase.Active_Queue__c);
@@ -214,28 +222,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
 
         // not archived? ok good.
         // Pick out the string above the dotted line and stash in 'latestComment' for later
-        Integer endPos = ((String) email.plainTextBody).indexOf(END_NEW_MESSAGE_INDICATOR);
-        if (endPos <= 0) {
-            latestComment = email.plainTextBody;
-        } else {
-            latestComment = ((String) email.plainTextBody).substring(0, endPos - 1);
-        }
-
-        // this is needed to correctly handle the case where the consultant replies with nothing but an action tag
-        Pattern replyPattern = Pattern.compile('On (.|\\n)*wrote:(.|\\n)*');
-        Matcher myMatcher = replyPattern.matcher(latestComment);
-        System.debug('latestComment was ' + latestComment);
-        try {
-            if (myMatcher.find()) {
-                System.debug('find 1');
-                System.debug('myMatcher.group(0) ' + myMatcher.group(0));
-                System.debug('latest comment was ' + latestComment);
-                endPos = latestComment.indexOf(myMatcher.group(0));
-                latestComment = latestComment.substring(0, endPos - 1).trim();
-            }
-        } catch (Exception probableStackOverflow) {
-            System.debug('ERROR '+probableStackOverflow.getMessage());
-        }
+        latestComment = trimComment( email.plainTextBody);
         // after stripping out the reply header in the body and the action tags, nothing may be left
         System.debug('latestComment is now ' + latestComment);
 
@@ -263,7 +250,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
                         '. Also sendCaseCommentToCustomer  is '+sendCaseCommentToCustomer +'. org is '+orgProperties.get('longname') +
                         '; active queue: '+theCase.Active_Queue__c+'; inferred Q: '+ inferQueueFromAddressee();
 
-                notify(new String[] {'scweber@stanford.edu'}, new String[] {}, new String[] {}, 'SF debug', whatwefound, false);
+//                notify(new String[] {'scweber@stanford.edu'}, new String[] {}, new String[] {}, 'SF debug', whatwefound, false);
 
                 // if it should go out to the customer, send it
                 // note the while sendCaseCommentToCustomer is initialized to false, there is a constructor
@@ -294,6 +281,121 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         }
 
         return result;
+    }
+
+    public String nextLine( String commentBeingTrimmed , boolean trim) {
+        String nextLine = commentBeingTrimmed;
+        Integer endPos;
+        do {
+            endPos = nextLine.indexOf('\n');
+            if (endPos >= 0) {
+                nextLine = nextLine.substring(endPos + 1);
+            }
+        } while ( nextLine.indexOf('\n') == 0);
+        if (trim) {
+            endPos = nextLine.indexOf('\n');
+            if (endPos >= 0) {
+                return nextLine.substring(0, endPos);
+            }
+        }
+        return nextLine;
+    }
+
+    public String trimComment(String emailBody) {
+        // There are two scenarios to consider. One is that the email contains the END_NEW_MESSAGE_INDICATOR
+        Integer endPos = emailBody.indexOf(END_NEW_MESSAGE_INDICATOR);
+        if (endPos >= 0) {
+            return trimComment(emailBody,endPos,' NMI: trimming comment with index '+endPos);
+        }
+        // the second scenario is harder to resolve.  The RIC has the habit of emailing the customer directly
+        // cc-ing the handler. In this case, the existing most recent comment should be used to truncate
+        //
+        String firstLineOfPriorComment = allCommentsForCase(theCase);
+        // skip the first two lines, on the assumption that they are strings like the following
+        // Created By: RIC Support (5/18/2019 8:21 AM)
+        // On May 18, 2019 at 8:21 AM Eileen F Kiamanesh wrote:
+        firstLineOfPriorComment = nextLine(firstLineOfPriorComment, false);
+        firstLineOfPriorComment = nextLine(firstLineOfPriorComment, true);
+        endPos = emailBody.indexOf(firstLineOfPriorComment);
+        if (endPos >= 0) {
+            return trimComment(emailBody,endPos,' FLC: trimming comment with index '+endPos);
+        }
+        return hailMaryTrimComment(emailBody);
+    }
+
+    public String hailMaryTrimComment(String emailBody) {
+        Integer endPos = emailBody.indexOf(END_NEW_MESSAGE_INDICATOR);
+        String debugInfo = '0';
+        if (endPos < 0) {
+            endPos = emailBody.indexOf('-----Original Message-----');
+            System.debug('endPos v1 ' + endPos);
+            debugInfo = '4';
+        }
+        if (endPos < 0) {
+            endPos = emailBody.indexOf('How are we doing? https://redcap.stanford.edu/plugins/ric_customer_satisfaction');
+            System.debug('endPos v2 ' + endPos);
+            debugInfo = '5';
+        }
+        if (endPos <= 0) {
+            endPos = emailBody.indexOf('Archana Bhat');
+            System.debug('endPos v3 ' + endPos);
+        }
+        if (endPos <= 0) {
+            endPos = emailBody.indexOf('Anna Graber');
+            System.debug('endPos v4 ' + endPos);
+        }
+        if (endPos <= 0) {
+            endPos = emailBody.indexOf('Eileen Kiamanesh');
+            System.debug('endPos v5 ' + endPos);
+        }
+        if (endPos <= 0) {
+            endPos = emailBody.indexOf('Yelena Nazarenko');
+            System.debug('endPos v6 ' + endPos);
+        }
+        if (endPos <= 0) {
+            endPos = emailBody.indexOf('Susan Weber');
+            System.debug('endPos v7 ' + endPos);
+        }
+        return trimComment(emailBody,endPos,debugInfo);
+    }
+
+    public String trimComment(String emailBody, Integer endPos, String debugInfo) {
+        String latestComment;
+        if (endPos == 0) {
+            System.debug('endPos 0, returning blank string ');
+            return '';
+        }
+        if (endPos < 0) {
+            latestComment = emailBody;
+            System.debug('not trimming comment, endpos was '+endPos);
+            debugInfo += ' FAIL '+endPos;
+        } else {
+            latestComment = ((String) emailBody).substring(0, endPos - 1);
+            System.debug('trimming comment to position '+endPos);
+            debugInfo += ' SUCCESS! '+endPos;
+        }
+
+        // this is needed to correctly handle the case where the consultant replies with nothing but an action tag
+        Pattern replyPattern = Pattern.compile('On (.|\\n)*wrote:(.|\\n)*');
+        Matcher myMatcher = replyPattern.matcher(latestComment);
+        System.debug('latestComment was ' + latestComment);
+        try {
+            if (myMatcher.find()) {
+                System.debug('find 1');
+                System.debug('myMatcher.group(0) ' + myMatcher.group(0));
+                System.debug('latest comment was ' + latestComment);
+                endPos = latestComment.indexOf(myMatcher.group(0).substring(0, 20));
+                System.debug('MATCH123 endpos is '+endPos+' string length is '+latestComment.length());
+//                notify(new String[] {'scweber@stanford.edu'}, new String[] {}, new String[] {}, 'SF debug '+debugInfo+': case '+theCase.CaseNumber+' comment length '+latestComment.length()+' trimmed to endpos '+endPos, latestComment, false);
+                latestComment = latestComment.substring(0, endPos - 1).trim();
+//            } else {
+//                notify(new String[] {'scweber@stanford.edu'}, new String[] {}, new String[] {}, 'SF debug '+debugInfo+': case '+theCase.CaseNumber+' no match found for comment', latestComment, false);
+            }
+        } catch (Exception probableStackOverflow) {
+            System.debug('ERROR '+probableStackOverflow.getMessage());
+        }
+        return latestComment;
+
     }
 
     private boolean sendingToSelf() {
@@ -473,7 +575,19 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         }
         statusMessage  = '';
 
-        if(tagMap.keySet().contains('open')) {
+        String queueName = null;
+        if(tagMap.keySet().contains('close')) {
+            theCase.Status = 'Closed';
+            theCase.Reason = tagMap.get('close');
+            if (theCase.Reason == null) {
+                theCase.Reason = 'Complete (Request Fulfilled)';
+            }
+            update theCase;
+            theCase = getCaseById(theCase.Id);
+
+            redcapNeedsUpdating = true;
+            statusMessage +=  theCase.CaseNumber + ' has been closed and will be auto-archived if no further activity is seen in the next few weeks.\n';
+        } else if(tagMap.keySet().contains('open')) {
 
             if (theCase.Status == 'Open' &&
                     theCase.Owner != null &&
@@ -495,7 +609,6 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             }
         }
 
-        String queueName = null;
         if(tagMap.keySet().contains('assign')) {
             String newOwnerName = tagMap.get('assign');
             System.debug('reassigning ownership as part of an @assign action: prior owner '+theCase.OwnerId + ' and new owner requested is '+newOwnerName);
@@ -572,18 +685,6 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
             }
         }
 
-        if(tagMap.keySet().contains('close')) {
-            theCase.Status = 'Closed';
-            theCase.Reason = tagMap.get('assign');
-            if (theCase.Reason == null) {
-                theCase.Reason = 'Complete (Request Fulfilled)';
-            }
-            update theCase;
-            theCase = getCaseById(theCase.Id);
-
-            redcapNeedsUpdating = true;
-            statusMessage +=  theCase.CaseNumber + ' has been closed and will be auto-archived if no further activity is seen in the next few weeks.\n';
-        }
 
         if (statusMessage.length() > 0 || latestComment.trim().length() > 0) {
             if (tagMap.keySet().contains('info')) {
@@ -1220,6 +1321,7 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
     public Map<String, String> getTags(String message) {
         Map<String, String> returnMap = new Map<String, String>();
         Pattern tagPattern = Pattern.compile(TAG_REGEX);
+
         // if for example the action tag was @labor=3, then
         // myMatcher.group(0) is @labor=3
         // myMatcher.group(1) is labor
@@ -1227,7 +1329,14 @@ global class SMEmailService implements Messaging.InboundEmailHandler {
         Matcher myMatcher = tagPattern.matcher(message);
         while(myMatcher.find()) {
             String tagName = myMatcher.group(1).toLowerCase();
-            if(VALID_TAGS.contains(tagName)) {
+            if(VALID_TAGS.contains(tagName)
+                    // just keep the first occurrence
+                    && returnMap.get(tagName) == null
+                    // furthermore refuse to process open if closed has already been seen
+                    // and vice versa for closed / open
+                    && (!'open'.equals(tagName) || returnMap.get('closed') == null)
+                    && (!'closed'.equals(tagName) || returnMap.get('open') == null)
+                    ) {
                 String tagValue = myMatcher.group(2);
                 returnMap.put(tagName, tagValue);
             }

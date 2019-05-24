@@ -191,6 +191,7 @@ private class SMEmailServiceTest {
     }
 
     @isTest public static  void validateCaseResponse2() {
+        // format used when replying to the email
         setup();
         SMEmailService emailServObj = new SMEmailService();
         Messaging.InboundEmail email = new Messaging.InboundEmail();
@@ -218,15 +219,19 @@ private class SMEmailServiceTest {
 
                 email.subject = 'Re ' + theCase.CaseNumber;
                 email.plainTextBody = 'Hi, this is not so random';
-
+                System.debug('line 222 validateCaseResponse2');
                 result = emailServObj.handleInboundEmail(email, env);
 
+                email.plainTextBody = 'From: Ben Marafino <marafino@stanford.edu<mailto:marafino@stanford.edu>>\nDate: Wednesday, May 1, 2019 at 12:06 PM\n To: Archana Bhat <archanab@stanford.edu<mailto:archanab@stanford.edu>>\nCc: ric-support <ric-support@stanford.edu<mailto:ric-support@stanford.edu>>\nSubject: Re: CASE-038417 Use of the Pooled Cohort Equations at the point of care and their impact on decision-making\n Hi Archana,\nThanks so much for setting this up! Would appreciate the opportunity for a consultation. Just out of curiosity, do you know what kind of turnaround time to expect?\nThanks again,\nBen\nSent from my mobile device\n\nOn Apr 30, 2019, at 15:53, Archana Bhat <archanab@stanford.edu<mailto:archanab@stanford.edu>> wrote:\n\nWe can set a consultation with you for better understanding. For now, Ive placed your case in the queue for a data analyst to pick up.\n\nThanks,\nArchana Bhat\nResearch Data Analyst\nDepartment of Biomedical Data Science\nStanford University School of Medicine\nTel: (650) 691-3950\narchanab@stanford.edu<mailto:archanab@stanford.edu>\nhttps://med.stanford.edu/ric.html\n\nHow are we doing? https://redcap.stanford.edu/plugins/ric_customer_satisfaction\n';
+                System.debug('line 226 validateCaseResponse2');
+                result = emailServObj.handleInboundEmail(email, env);
                 System.assertEquals(result.success, true);
             }
         }
     }
 
     @isTest public static  void validateCaseResponse3() {
+        // format used when posted from RIC's php intake form
         setup();
         SMEmailService emailServObj = new SMEmailService();
         Messaging.InboundEmail email = new Messaging.InboundEmail();
@@ -434,8 +439,7 @@ private class SMEmailServiceTest {
 
     @isTest static void validateOpenActionTag() {
         setup();
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
+
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
         String actionTags = '@open';
@@ -455,8 +459,7 @@ private class SMEmailServiceTest {
 
     @isTest static void validateOpenWhenAlreadyOwned() {
         setup();
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
+
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Open';
         String actionTags = '@open';
@@ -486,8 +489,7 @@ private class SMEmailServiceTest {
 
     @isTest static void validateLaborActionTag() {
         setup();
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
+
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
         String actionTags = '@labor=2';
@@ -508,8 +510,7 @@ private class SMEmailServiceTest {
 
     @isTest static void validateUpdateLaborActionTag() {
         setup();
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
+
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
         String actionTags = '@labor=2';
@@ -530,8 +531,7 @@ private class SMEmailServiceTest {
 
     @isTest static void validateCloseActionTag() {
         setup();
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
+
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
         String actionTags = '@close';
@@ -561,8 +561,6 @@ private class SMEmailServiceTest {
 
     static void validateAssignActionTag(String user) {
 
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
         String actionTags = '@assign=' + user;
@@ -580,10 +578,27 @@ private class SMEmailServiceTest {
         }
     }
 
+    @isTest static void validateTrimComment() {
+        Pattern replyPattern = Pattern.compile('On (.|\\n)*wrote:(.|\\n)*');
+        String latestComment = 'Sent from my mobile device  On Apr 30, 2019, at 15:20, Archana Bhat <archanab@stanford.edu<mailto:archanab@stanford.edu>> wrote:Hi Ben,';
+        Matcher myMatcher = replyPattern.matcher(latestComment);
+        try {
+            if (myMatcher.find()) {
+                System.debug('find 1');
+                System.debug('myMatcher.group(0) ' + myMatcher.group(0));
+
+                Integer endPos = latestComment.indexOf(myMatcher.group(0));
+                latestComment = latestComment.substring(0, endPos - 1).trim();
+                System.debug('latestComment has been trimmed to '+latestComment);
+            }
+        } catch (Exception probableStackOverflow) {
+            System.debug('ERROR '+probableStackOverflow.getMessage());
+        }
+    }
+
     @isTest static void validateDoesNotContainSupport() {
         setup();
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
+
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
 
@@ -613,8 +628,7 @@ private class SMEmailServiceTest {
 
     @isTest static void validateInfoActionTag() {
         setup();
-        List<Group> theQueuList = [SELECT Id, Name FROM Group WHERE Type = 'Queue' AND Name = :CONSULT_QUEUE];
-        Group theQueu = theQueuList.get(0);
+
         SMEmailService emailServObj = setupEmailService();
         emailServObj.theCase.Status = 'Submitted';
         String actionTags = '@info';
